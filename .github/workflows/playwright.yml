@@ -25,11 +25,117 @@ jobs:
         run: npx playwright install --with-deps chrome
 
       - name: Run Playwright tests
-        run: xvfb-run -a npx playwright test --workers=1
+        run: xvfb-run -a npx playwright test --workers=1 --reporter=line,json,html
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: results.json
+          PLAYWRIGHT_HTML_OPEN: never
 
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
           name: playwright-report
-          path: playwright-report/
+          path: |
+            playwright-report/
+            results.json
           retention-days: 30
+
+      - name: Send Discord notification
+        if: always()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TEST_STATUS: ${{ job.status }}
+          REPORT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+        run: |
+          python3 - <<'PY'
+          import os
+          import json
+          import urllib.request
+          from datetime import datetime, timezone, timedelta
+
+          date = datetime.now(
+              timezone(timedelta(hours=7))
+          ).strftime("%d/%m/%Y %H:%M")
+
+          message = [
+              "**OLAMOZ - BÁO CÁO KIỂM THỬ**",
+              f"Thời gian: {date}",
+              "Website: olamoz.co.mz",
+              "Trình duyệt: Google Chrome",
+              ""
+          ]
+
+          if os.path.exists("results.json"):
+              with open("results.json", encoding="utf-8") as f:
+                  report = json.load(f)
+
+              stats = report["stats"]
+
+              passed = stats.get("expected", 0)
+              failed = stats.get("unexpected", 0)
+              skipped = stats.get("skipped", 0)
+              flaky = stats.get("flaky", 0)
+              total = passed + failed + skipped + flaky
+
+              message.extend([
+                  f"Tổng số test: {total}",
+                  f"🟢 PASS: {passed}",
+                  f"🔴 FAIL: {failed}",
+                  f"⚪ SKIP: {skipped}",
+                  f"🟡 FLAKY: {flaky}",
+                  ""
+              ])
+
+              def check_suite(suite):
+                  for spec in suite.get("specs", []):
+                      for test in spec.get("tests", []):
+                          status = test.get("status")
+
+                          icon = {
+                              "expected": "🟢 PASS",
+                              "unexpected": "🔴 FAIL",
+                              "skipped": "⚪ SKIP",
+                              "flaky": "🟡 FLAKY"
+                          }.get(status, "❔ UNKNOWN")
+
+                          message.append(
+                              f"{icon} - {spec['title']}"
+                          )
+
+                  for child in suite.get("suites", []):
+                      check_suite(child)
+
+              for suite in report.get("suites", []):
+                  check_suite(suite)
+
+          else:
+              message.append(
+                  "Không có báo cáo JSON. Kiểm tra lỗi workflow."
+              )
+
+          message.append("")
+          message.append(
+              "Kết quả workflow: " +
+              os.environ["TEST_STATUS"].upper()
+          )
+
+          content = "\n".join(message)[:1700]
+          content += "\n\nChi tiết: " + os.environ["REPORT_URL"]
+
+          payload = {
+              "content": content,
+              "allowed_mentions": {"parse": []}
+          }
+
+          request = urllib.request.Request(
+              os.environ["DISCORD_WEBHOOK_URL"],
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Content-Type": "application/json",
+                  "User-Agent": "Olamoz-Test-Bot/1.0"
+              }
+          )
+
+          with urllib.request.urlopen(request, timeout=30) as response:
+              print("Đã gửi thông báo Discord:", response.status)
+          PY
