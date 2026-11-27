@@ -1,0 +1,17 @@
+name: Test Schedule
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  check-schedule:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Kiem tra lich chay tu dong
+        run: |
+          echo "GitHub Actions da chay thanh cong"
+          echo "Loai kich hoat: ${{ github.event_name }}"
+          TZ=Asia/Ho_Chi_Minh date
